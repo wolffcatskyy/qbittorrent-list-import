@@ -128,6 +128,31 @@ python3 main.py --min-rules 500          # custom sanity floor
 python3 main.py --allow-partial          # proceed if some feeds fail
 ```
 
+## Project history
+
+This project started with a different goal: publish a curated, hosted IP
+filter - a single ready-to-use URL that always serves a fresh list. While
+building it, we checked the terms of the sources we wanted to include, and
+that changed the plan:
+
+- **Spamhaus DROP/DROPv6** grants conditional free use but no license to
+  redistribute derived data.
+- **I-BlockList's developer policy** bars scheduled fetching and any
+  redistribution of its data - explicitly including private redistribution -
+  without written permission.
+- **FireHOL Level 1** aggregates those and other lists, so its output
+  carries the same upstream constraints.
+
+A hosted compiled list would have redistributed exactly that data, so the
+published scope became code only: this repository ships the compiler, and
+no compiled blocklists are committed, hosted, or uploaded. Separately,
+qBittorrent has no native URL import for IP filters
+([qbittorrent/qBittorrent#72](https://github.com/qbittorrent/qBittorrent/issues/72),
+open since 2012), so even a permitted hosted list would need a client with
+remote-list support or a small local updater that fetches the URL and
+reloads the filter through qBittorrent's Web API. A hosted edition can
+revisit redistribution-permitted sources in the future.
+
 ## Distribution model and upstream terms
 
 The compiled lists are **not committed to this repository**. They embed
