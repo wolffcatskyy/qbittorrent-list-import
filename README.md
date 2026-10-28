@@ -38,8 +38,8 @@ check the build.
 
 An IP filter, not invisibility. It doesn't hide your address from trackers
 or DHT, guarantee protection from monitoring, or replace a VPN. Feeds can
-lag, and blocked ranges can contain legitimate peers. If a torrent stalls,
-check the filter first.
+lag, ranges change hands, and blocked ranges can contain legitimate peers.
+If a torrent stalls, check the filter first.
 
 ## One-line setup: compile and install into qBittorrent
 
