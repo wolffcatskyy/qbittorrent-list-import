@@ -358,6 +358,42 @@ class SyncFlowTests(unittest.TestCase):
             self.assertIn("pause your torrents", out)
 
 
+
+class PromptCredentialTests(unittest.TestCase):
+    """Credentials must be prompted on /dev/tty, never stdin, so the tool
+    works under `curl ... | sh` where stdin is the download pipe."""
+
+    def test_username_reads_dev_tty_not_stdin(self):
+        class NonClosingStringIO(io.StringIO):
+            def close(self):
+                pass
+        fake_tty_in = NonClosingStringIO("alice\n")
+        fake_tty_out = NonClosingStringIO()
+        def fake_open(path, mode="r", *a, **k):
+            if path == "/dev/tty":
+                return fake_tty_in if "r" in mode else fake_tty_out
+            raise OSError("unexpected open: " + path)
+        with mock.patch("os.open", return_value=99), \
+                mock.patch("os.fdopen", return_value=fake_tty_in), \
+                mock.patch("builtins.open", side_effect=fake_open):
+            self.assertEqual(
+                qbt_sync.prompt_credential("username: ", secret=False), "alice")
+        self.assertEqual(fake_tty_out.getvalue(), "username: ")
+
+    def test_no_terminal_username_fails_cleanly(self):
+        with mock.patch("os.open", side_effect=OSError("no tty")):
+            with self.assertRaises(SystemExit) as ctx:
+                qbt_sync.prompt_credential("username: ", secret=False)
+        self.assertIn("no interactive terminal", str(ctx.exception))
+
+    def test_no_terminal_password_fails_cleanly(self):
+        with mock.patch("getpass.getpass", side_effect=EOFError):
+            with self.assertRaises(SystemExit) as ctx:
+                qbt_sync.prompt_credential("password: ", secret=True)
+        self.assertIn("no interactive terminal", str(ctx.exception))
+        self.assertNotIn("Traceback", str(ctx.exception))
+
+
 class Qbt5StubLoginTests(unittest.TestCase):
     def test_401_maps_to_rejected_credentials(self):
         with StubQbt(fail_login=True) as stub:

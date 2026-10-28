@@ -60,6 +60,37 @@ class ApiError(RuntimeError):
     pass
 
 
+def prompt_credential(prompt: str, secret: bool) -> str:
+    """Prompt on the controlling terminal, never stdin.
+
+    Under `curl ... | sh` the tool's stdin is the download pipe, so
+    input() would raise EOFError; /dev/tty is the user's actual terminal.
+    Fails with a clear message (no traceback) when no terminal exists.
+    """
+    if secret:
+        try:
+            return getpass.getpass(prompt)
+        except (EOFError, OSError):
+            pass  # fall through to the clear error below
+    else:
+        try:
+            fd = os.open("/dev/tty", os.O_RDONLY)
+            with os.fdopen(fd, "r") as tty_in:
+                with open("/dev/tty", "w") as tty_out:
+                    tty_out.write(prompt)
+                    tty_out.flush()
+                line = tty_in.readline()
+                if line:
+                    return line.rstrip("\n")
+        except OSError:
+            pass
+    sys.exit(
+        "ERROR: cannot prompt for the qBittorrent WebUI "
+        + ("password" if secret else "username")
+        + ": no interactive terminal is available. Re-run from a terminal."
+    )
+
+
 def _request(base: str, path: str, cookie: str | None = None,
              data: dict | None = None) -> bytes:
     url = base.rstrip("/") + path
@@ -239,9 +270,9 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
     username = args.username
     password = args.password
     if username is None:
-        username = input("qBittorrent WebUI username: ")
+        username = prompt_credential("qBittorrent WebUI username: ", secret=False)
     if password is None:
-        password = getpass.getpass("qBittorrent WebUI password: ")
+        password = prompt_credential("qBittorrent WebUI password: ", secret=True)
 
     # 1. Verify API reachability and credentials BEFORE downloading anything.
     try:
