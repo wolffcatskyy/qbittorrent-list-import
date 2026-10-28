@@ -67,9 +67,10 @@ loads it in a background thread and swaps the filter atomically, with the
 old rules active until the new ones are in place. That behavior is verified
 in qBittorrent's source (`sessionimpl.cpp`: the path change re-parses and
 then sets the filter "in one go so there isn't a time window") and
-exercised end-to-end against a live qBittorrent 5.3.0 on Linux: fresh
-install, update alternation, restart persistence, and parse confirmation in
-qBittorrent's own log.
+exercised end-to-end against a live qBittorrent 5.3.0 on Linux, and
+confirmed with a full successful run on macOS: fresh install, update
+alternation, restart persistence, and parse confirmation in qBittorrent's
+own log.
 
 The failure path is handled, but read this honestly: if qBittorrent cannot
 parse the new file after the switch (which qBittorrent answers by
