@@ -152,6 +152,22 @@ static copy and says clearly that it will go stale. If you already have a
 different tracker URL subscription configured, the tool names it and asks
 before replacing it.
 
+**Every list entry is checked before install.** Blocklist rules are all
+structurally validated at build time (malformed lines dropped, ranges
+normalized, special-purpose ranges excluded) and the written file is
+re-validated on disk before qBittorrent ever sees it; the tool never
+pings listed IPs. Before tracker setup, each tracker in the list gets a
+preflight probe: UDP trackers answer a protocol-level connect handshake
+(no announce, no torrent data), HTTP/HTTPS trackers get a connection
+check only - HTTPS certificates are validated, and a plain TCP connect
+is reported as reachability, not tracker-protocol success. Trackers that
+resolve to private or reserved addresses are refused, not probed. The
+report is honest about its limits: "no response" is not proof a tracker
+is dead, unknown entries are kept rather than silently dropped, and on
+qBittorrent 5.1+ the subscription refreshes itself afterwards, so the
+check is a snapshot of the list at install time, not a guarantee about
+future contents.
+
 **Restore and uninstall keep a memory, on purpose.** The first time the
 tool changes a managed setting, it records the previous values in
 `~/.qbittorrent-blocklist/companion-state.json` (permissions 0600). That

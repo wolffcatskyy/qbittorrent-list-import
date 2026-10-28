@@ -423,8 +423,13 @@ class PromptCredentialTests(unittest.TestCase):
 
 
 
+def fake_preflight(urls, timeout=4.0, max_workers=10, allow_private=False):
+    return [qbt_sync.trackerprobe.ProbeResult(u, qbt_sync.trackerprobe.OK,
+                                              "stubbed", 1) for u in urls]
+
+
 def run_action(stub: StubQbt, argv: list[str], tty_answers: list[str] | None = None,
-               fetch_text: str = "", statedir: str | None = None):
+               fetch_text: str = "udp://stub-tracker.example:6969", statedir: str | None = None):
     """Run any action with optional tty answer script and persistent state dir."""
     out = io.StringIO()
     own_dir = None
@@ -437,6 +442,8 @@ def run_action(stub: StubQbt, argv: list[str], tty_answers: list[str] | None = N
                               Path(statedir) / "companion-state.json"),
             mock.patch.object(qbt_sync, "compile_rules", side_effect=fake_compile),
             mock.patch.object(qbt_sync.compiler, "fetch", return_value=fetch_text),
+            mock.patch.object(qbt_sync.trackerprobe, "preflight",
+                              side_effect=fake_preflight),
         ]
         if tty_answers is not None:
             answers = iter(tty_answers)
@@ -472,6 +479,8 @@ class TrackerActionTests(StateIsolationMixin, unittest.TestCase):
             self.assertIn("original_prefs", state,
                           "pre-change snapshot must be saved for restore")
             self.assertIn("every 24 hours", out)
+            self.assertIn("snapshot report, not a filter", out,
+                          "native preflight must be labeled advisory")
 
     def test_static_fallback_on_46(self):
         with StubQbt() as stub:
@@ -484,6 +493,7 @@ class TrackerActionTests(StateIsolationMixin, unittest.TestCase):
             self.assertIn("udp://tracker-a", stub.prefs["add_trackers"])
             self.assertFalse(stub.prefs["add_trackers_from_url_enabled"])
             self.assertIn("will NOT stay fresh", out)
+            self.assertIn("2/2 answered", out, "preflight report shown")
 
     def test_trackers_declined_changes_nothing(self):
         with StubQbt() as stub:

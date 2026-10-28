@@ -56,6 +56,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import main as compiler
+import trackerprobe
 
 DEFAULT_URL = "http://127.0.0.1:8080"
 DEFAULT_FILTER_DIR = Path.home() / ".qbittorrent-blocklist"
@@ -466,12 +467,35 @@ def setup_trackers(base: str, cookie: str, args, state: dict) -> None:
         print(f"qBittorrent {version} supports a URL subscription: it downloads")
         print(f"  {TRACKER_LIST_URL}")
         print("and refreshes it about every 24 hours itself.")
-        planned = {"add_trackers_from_url_enabled": True,
-                   "add_trackers_url": TRACKER_LIST_URL}
     else:
         print(f"qBittorrent {version} predates URL subscriptions (need 5.1+),")
         print(f"so this installs a one-time static copy of {TRACKER_LIST_URL}.")
         print("It will NOT stay fresh; re-run this action to update it.")
+
+    print()
+    print(f"Preflight: downloading the list and checking each tracker")
+    print("(UDP trackers get a protocol-level connect probe; HTTP/HTTPS get a")
+    print("connection check only - no announces, no torrent data).")
+    text = compiler.fetch(TRACKER_LIST_URL)
+    entries = [t.strip() for t in text.splitlines() if t.strip()]
+    if not entries:
+        sys.exit("ERROR: tracker list downloaded empty; no settings changed")
+    results = trackerprobe.preflight(entries)
+    counts = trackerprobe.summarize(results)
+    okish = counts.get(trackerprobe.OK, 0) + counts.get(trackerprobe.REACHABLE, 0)
+    print(f"  {okish}/{len(entries)} answered "
+          f"({', '.join(f'{k}: {v}' for k, v in sorted(counts.items()))})")
+    for r in results:
+        if r.status not in (trackerprobe.OK, trackerprobe.REACHABLE):
+            print(f"    {r.status}: {r.url} ({r.detail})")
+    print("'No response' is not proof a tracker is dead - probes can be")
+    print("lost, rate-limited or ignored. Unknown entries are kept, not dropped.")
+    if native:
+        print("qBittorrent applies the whole list URL and refreshes it itself,")
+        print("so this check is a snapshot report, not a filter on what it installs.")
+        planned = {"add_trackers_from_url_enabled": True,
+                   "add_trackers_url": TRACKER_LIST_URL}
+    else:
         planned = {"add_trackers_enabled": True, "__static__": True}
 
     current_url = prefs.get("add_trackers_url") or ""
@@ -486,16 +510,25 @@ def setup_trackers(base: str, cookie: str, args, state: dict) -> None:
     if native:
         api_set_preferences(args.url, cookie, planned)
     else:
-        text = compiler.fetch(TRACKER_LIST_URL)
-        trackers = [t.strip() for t in text.splitlines() if t.strip()]
-        if not trackers:
-            sys.exit("ERROR: tracker list downloaded empty; no settings changed")
+        chosen = entries
+        if not args.yes:
+            answered = [r.url for r in results
+                        if r.status in (trackerprobe.OK, trackerprobe.REACHABLE)]
+            if 0 < len(answered) < len(entries):
+                print(f"Install all {len(entries)} entries, or only the "
+                      f"{len(answered)} that answered?")
+                pick = tty_prompt("[a]ll / [r]esponsive only [a]: ",
+                                  "a or r").strip().lower()
+                if pick in ("r", "responsive"):
+                    chosen = answered
+                    print(f"Keeping only the {len(chosen)} responsive entries;")
+                    print("unanswered ones may still be fine - re-run to retry.")
         api_set_preferences(args.url, cookie, {
             "add_trackers_enabled": True,
-            "add_trackers": "\n\n".join(trackers),
+            "add_trackers": "\n\n".join(chosen),
         })
         planned = {"add_trackers_enabled": True}
-        print(f"Installed {len(trackers)} trackers as a static list.")
+        print(f"Installed {len(chosen)} trackers as a static list.")
 
     after = api_get_preferences(args.url, cookie)
     state["last_tracker_change"] = datetime.now(timezone.utc).isoformat()
