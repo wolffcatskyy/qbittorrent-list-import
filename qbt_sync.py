@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""qBittorrent Companion: install or update a compiled blocklist (and,
+"""qBittorrent List Importer: install or update a compiled blocklist (and,
 opt-in, a tracker list) inside a running qBittorrent, with a menu.
 
 Blocklist updates use path alternation so filtering is never interrupted:
@@ -536,7 +536,7 @@ def restore_settings(base: str, cookie: str, args, state: dict) -> None:
     state["last_applied"] = dict(original)
     state["last_restore"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
-    print("Done: settings restored to the saved pre-Companion values.")
+    print("Done: settings restored to the saved pre-import values.")
 
 
 def uninstall(base: str, cookie: str, args, state: dict) -> None:
@@ -604,7 +604,7 @@ MENU = """What would you like to do?
 
 
 def menu_loop(base: str, cookie: str, args, state: dict) -> None:
-    print("\nqBittorrent Companion")
+    print("\nqBittorrent List Importer")
     print("From the makers of crowdsec-blocklist-import: yet another list")
     print("aggregator and installer.")
     print("=" * 40)
@@ -638,7 +638,7 @@ def menu_loop(base: str, cookie: str, args, state: dict) -> None:
 
 def run(argv=None, *, now_unix: int | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="qBittorrent Companion: compile the blocklist and manage "
+        description="qBittorrent List Importer: compile the blocklist and manage "
                     "it (and, opt-in, a tracker list) inside a running qBittorrent."
     )
     action = parser.add_mutually_exclusive_group()

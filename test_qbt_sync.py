@@ -555,7 +555,7 @@ class MenuAndStatusTests(StateIsolationMixin, unittest.TestCase):
         with StubQbt() as stub:
             code, out, _ = run_action(stub, [], tty_answers=["q"])
             self.assertEqual(code, 0)
-            self.assertIn("qBittorrent Companion", out)
+            self.assertIn("qBittorrent List Importer", out)
             self.assertIn("crowdsec-blocklist-import", out)
             self.assertIn("qBittorrent 5.3.0", out)
             self.assertIn("URL subscription off", out)

@@ -1,12 +1,14 @@
-# qbittorrent-blocklist-compiler
+# qBittorrent List Importer
 
-Build your own qBittorrent IP filter. Know what's in it. Know when it fails.
+Get IP blocklists and tracker lists, clean them up, and put them where you
+need them. Know what's in them. Know when they fail.
 
 Have you ever been frustrated wanting to use qBittorrent features like
-blocklists, but could never find a list to use? Us too. This project doesn't
-make or host the lists. Like CrowdSec's engine, it's the tool: your machine
-downloads the lists from their providers, combines them, and installs the
-result into qBittorrent. No data is hosted or redistributed by this project.
+blocklists and tracker lists, but could never find a list to use? Us too.
+This project doesn't make, host, or curate the lists. Like CrowdSec's
+engine, it's the tool: your machine downloads the lists from their
+providers, combines them, and installs the result into qBittorrent. No data
+is hosted or redistributed by this project.
 
 *From the makers of [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import): yet another list aggregator and installer.*
 
@@ -14,6 +16,10 @@ Multiple sources, one `ipfilter.dat`, generated on your machine. Combine
 FireHOL Level 1, Spamhaus DROP and DROPv6, and Bluetack Level 1 in the DAT
 format qBittorrent expects. Retained rules carry source labels. Duplicate
 and fully covered ranges are removed, while partial overlaps remain labeled.
+Opt in to a tracker list the same way: on qBittorrent 5.1+ the tool
+configures a subscription to a published tracker list that qBittorrent
+keeps fresh itself; older versions get a static copy with a staleness
+warning.
 
 Built to stop rather than fail quietly. Failed or empty feeds abort the
 build by default. A configurable minimum-rule floor helps catch unexpectedly
@@ -43,11 +49,14 @@ or DHT, guarantee protection from monitoring, or replace a VPN. Feeds can
 lag, ranges change hands, and blocked ranges can contain legitimate peers.
 If a torrent stalls, check the filter first.
 
-## One-line setup: compile and install into qBittorrent
+## One-line setup: blocklists and trackers, installed into qBittorrent
 
 ```
-curl -fsSL https://raw.githubusercontent.com/wolffcatskyy/qbittorrent-blocklist/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/wolffcatskyy/qbittorrent-list-import/main/install.sh | sh
 ```
+
+On a terminal this opens the menu below (blocklists, trackers, status,
+preview, restore, uninstall); scripted runs stay non-interactive.
 
 The script downloads the compiler and sync tool into a temporary directory,
 builds the filter, loads it into a running qBittorrent through its Web API,
@@ -102,12 +111,12 @@ filesystem that qBittorrent process can read, so run the command on that
 host, or use `--filter-dir` pointed at a shared mount plus `QBT_URL` aimed
 at that host.
 
-## The Companion menu: blocklist, trackers, restore, uninstall
+## The menu: blocklists and trackers with equal billing
 
 Run the one-line installer on a terminal and it now opens a menu:
 
 ```
-qBittorrent Companion
+qBittorrent List Importer
 From the makers of crowdsec-blocklist-import: yet another list
 aggregator and installer.
 ========================================
@@ -352,10 +361,12 @@ permission. To actually get a filter file, run `main.py` locally.
 python3 -m unittest
 ```
 
-53 tests cover CIDR and P2P parsing, gzip and size-cap enforcement, the
+62 compiler tests cover CIDR and P2P parsing, gzip and size-cap enforcement, the
 special-purpose exclusion set (pinned against the ranges actually present
 in the live feeds), exact and covered-range dedup with feed priority, DAT
 output format for IPv4 and IPv6, ordering, deterministic rendering, atomic
 writes, feed-failure handling and the minimum-rule floor, and the
 rate-limited feed guard (24h cache reuse, pre-network attempt stamping,
-concurrency lock, fail-closed behavior).
+concurrency lock, fail-closed behavior). A further 41 tests cover the sync
+tool and menu: tracker opt-in, version gating, restore, uninstall, drift
+detection, and tty handling.

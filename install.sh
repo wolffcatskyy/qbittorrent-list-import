@@ -1,7 +1,7 @@
 #!/bin/sh
 # One-line installer for the qBittorrent blocklist sync tool.
 #
-#   curl -fsSL https://raw.githubusercontent.com/wolffcatskyy/qbittorrent-blocklist/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/wolffcatskyy/qbittorrent-list-import/main/install.sh | sh
 #
 # Downloads one consistent snapshot of the repository into a temporary
 # directory, compiles the blocklist, loads it into a running qBittorrent
@@ -17,7 +17,7 @@
 # never prints or stores your credentials.
 set -eu
 
-REPO="wolffcatskyy/qbittorrent-blocklist"
+REPO="wolffcatskyy/qbittorrent-list-import"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: python3 is required (3.10+)." >&2
