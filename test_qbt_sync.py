@@ -31,7 +31,8 @@ SECRET = "harness-password"
 class StubQbt:
     """A disposable in-process stand-in for the qBittorrent Web API."""
 
-    def __init__(self, prefs: dict | None = None, fail_login: bool = False):
+    def __init__(self, prefs: dict | None = None, fail_login: bool = False,
+                 parse_result: str = "success"):
         self.prefs = {
             "ip_filter_enabled": False,
             "ip_filter_path": "",
@@ -39,6 +40,7 @@ class StubQbt:
         if prefs:
             self.prefs.update(prefs)
         self.fail_login = fail_login
+        self.parse_result = parse_result
         self.cookie_name = "SID"
         self.reject_code = 403
         self.set_calls: list[dict] = []
@@ -77,11 +79,16 @@ class StubQbt:
                     payload = json.loads(form["json"][0])
                     stub.set_calls.append(payload)
                     stub.prefs.update(payload)
-                    if "ip_filter_path" in payload:
+                    if "ip_filter_path" in payload and stub.parse_result != "silent":
+                        msg = {"success": "Successfully parsed the IP filter "
+                                          "file. Number of rules applied: 3",
+                               "zero": "Successfully parsed the IP filter "
+                                       "file. Number of rules applied: 0",
+                               "failure": "Failed to parse the IP filter file",
+                               }[stub.parse_result]
                         stub.log_entries.append({
                             "id": len(stub.log_entries) + 1,
-                            "message": "Successfully parsed the IP filter file. "
-                                       "Number of rules applied: 3",
+                            "message": msg,
                             "timestamp": stub.now_unix,
                             "type": 1,
                         })
@@ -259,6 +266,77 @@ class SyncFlowTests(unittest.TestCase):
             stub.cookie_name = "QBT_SID_18080"
             cookie = qbt_sync.api_login(stub.url, GOOD_USER, GOOD_PASS)
             self.assertIn("stub-session", cookie)
+
+
+    def test_parse_failure_reverts_to_previous_filter(self):
+        """qBittorrent installs an EMPTY filter on parse failure; the tool
+        must revert the path preference so the old rules come back."""
+        with TemporaryDirectory() as tmp:
+            a = Path(tmp) / "ipfilter-a.dat"
+            a.write_text("previous good rules")
+            with StubQbt({"ip_filter_enabled": True, "ip_filter_path": str(a)},
+                         parse_result="failure") as stub:
+                with self.assertRaises(SystemExit) as ctx:
+                    run_sync(stub, ["--filter-dir", tmp])
+                self.assertIn("restored the previous filter", str(ctx.exception))
+                self.assertEqual(stub.prefs["ip_filter_path"], str(a))
+                self.assertTrue(stub.prefs["ip_filter_enabled"])
+                self.assertTrue(a.exists(), "previous filter must be kept")
+                self.assertTrue((Path(tmp) / "ipfilter-b.dat").exists(),
+                                "failed file left for inspection, not deleted")
+                # two set calls: install attempt, then revert
+                self.assertEqual(len(stub.set_calls), 2)
+                self.assertEqual(stub.set_calls[1]["ip_filter_path"], str(a))
+
+    def test_first_install_parse_failure_restores_original_prefs(self):
+        with StubQbt(parse_result="failure") as stub, TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                run_sync(stub, ["--filter-dir", tmp])
+            self.assertEqual(stub.prefs["ip_filter_path"], "")
+            self.assertFalse(stub.prefs["ip_filter_enabled"])
+
+    def test_zero_rule_parse_counts_as_failure_and_reverts(self):
+        """Real qBittorrent 5.3.0 logs a malformed file as 'Successfully
+        parsed ... Number of rules applied: 0' - an empty filter via the
+        success path. Zero rules must trigger the same revert."""
+        with TemporaryDirectory() as tmp:
+            a = Path(tmp) / "ipfilter-a.dat"
+            a.write_text("previous good rules")
+            with StubQbt({"ip_filter_enabled": True, "ip_filter_path": str(a)},
+                         parse_result="zero") as stub:
+                with self.assertRaises(SystemExit) as ctx:
+                    run_sync(stub, ["--filter-dir", tmp])
+                self.assertIn("restored the previous filter", str(ctx.exception))
+                self.assertEqual(stub.prefs["ip_filter_path"], str(a))
+                self.assertTrue(a.exists())
+
+    def test_unconfirmed_parse_keeps_stale_file_and_succeeds(self):
+        with TemporaryDirectory() as tmp:
+            a = Path(tmp) / "ipfilter-a.dat"
+            a.write_text("previous rules")
+            with StubQbt({"ip_filter_enabled": True, "ip_filter_path": str(a)},
+                         parse_result="silent") as stub:
+                stub_class = stub
+                code, out = run_sync(stub, ["--filter-dir", tmp])
+            self.assertEqual(code, 0)
+            self.assertIn("previous filter file was kept", out)
+            self.assertTrue(a.exists(), "stale kept while parse unconfirmed")
+            self.assertEqual(stub.prefs["ip_filter_path"],
+                             str(Path(tmp) / "ipfilter-b.dat"))
+
+    def test_plaintext_http_to_remote_host_refused(self):
+        with self.assertRaises(SystemExit) as ctx:
+            qbt_sync.run(["--url", "http://192.0.2.10:8080",
+                          "--username", GOOD_USER, "--password", GOOD_PASS])
+        self.assertIn("plaintext HTTP", str(ctx.exception))
+
+    def test_plaintext_http_remote_allowed_with_flag(self):
+        # reaches out and fails to connect instead of being refused upfront
+        with self.assertRaises(SystemExit) as ctx:
+            qbt_sync.run(["--url", "http://example.invalid:9",
+                          "--username", GOOD_USER, "--password", GOOD_PASS,
+                          "--allow-insecure-http"])
+        self.assertIn("cannot reach", str(ctx.exception))
 
 
 class Qbt5StubLoginTests(unittest.TestCase):

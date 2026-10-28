@@ -54,10 +54,9 @@ download-guard cache are kept.
 
 Prereqs: Linux or macOS, Python 3.10+, and qBittorrent running with its
 WebUI enabled (Tools > Options > Web UI). You'll be prompted for the WebUI
-username and password (or set `QBT_USERNAME`/`QBT_PASSWORD`, and `QBT_URL`
-if it isn't `http://127.0.0.1:8080`). Credentials are never printed or
-stored, and the tool never changes qBittorrent's WebUI or password
-settings. Both login contracts are handled (qBittorrent 5.x's 204 +
+username and password on the terminal (set `QBT_URL` if it isn't
+`http://127.0.0.1:8080`). Credentials are never printed or stored, and the
+tool never changes qBittorrent's WebUI or password settings. Both login contracts are handled (qBittorrent 5.x's 204 +
 `QBT_SID_<port>` cookie and the older 200 "Ok." + `SID`).
 
 The install never interrupts filtering. Toggling the filter off and on
@@ -187,7 +186,7 @@ To compile *and* install into a running qBittorrent in one step (see
 ```
 python3 qbt_sync.py                      # prompts for WebUI credentials
 python3 qbt_sync.py --feeds security --filter-dir /path/to/dir
-QBT_URL=http://nas:8080 python3 qbt_sync.py
+QBT_URL=http://nas:8080 python3 qbt_sync.py   # non-secret setting only
 ```
 
 ## Project history

@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import re
 import os
 import sys
 import time
@@ -116,13 +117,14 @@ def api_set_preferences(base: str, cookie: str, prefs: dict) -> None:
              data={"json": json.dumps(prefs)})
 
 
-def api_wait_for_parse(base: str, cookie: str, since_unix: int) -> bool:
-    """Best-effort confirmation that qBittorrent parsed the new filter.
+def api_watch_parse(base: str, cookie: str, since_unix: int) -> str:
+    """Watch qBittorrent's log for the parse outcome: 'parsed', 'failed',
+    or 'unknown' (timeout / log unreadable).
 
-    Watches the qBittorrent execution log for the "Successfully parsed the
-    IP filter file" message. Returns False on timeout or if the log is not
-    readable; the caller treats that as a warning, not a failure, because
-    the preference readback is the authoritative check.
+    This matters because qBittorrent reacts to a parse failure by
+    installing an EMPTY filter (sessionimpl.cpp handleIPFilterError), which
+    would leave the client unfiltered while reporting enabled=true. The
+    caller reverts to the previous filter file on 'failed'.
     """
     deadline = time.monotonic() + LOG_POLL_SECONDS
     while time.monotonic() < deadline:
@@ -130,13 +132,31 @@ def api_wait_for_parse(base: str, cookie: str, since_unix: int) -> bool:
             body, _ = _request(base, "/api/v2/log/main?normal=true&last_known_id=-1",
                                cookie=cookie)
             for entry in json.loads(body):
-                if (entry.get("timestamp", 0) >= since_unix  # log timestamps are Unix seconds
-                        and "IP filter" in entry.get("message", "")):
-                    return True
+                if entry.get("timestamp", 0) < since_unix:
+                    continue  # log timestamps are Unix seconds
+                msg = entry.get("message", "")
+                if "Failed to parse the IP filter" in msg:
+                    return "failed"
+                if "Successfully parsed the" in msg and "IP filter" in msg:
+                    # 5.x: "... IP filter file. Number of rules applied: N"
+                    # 4.x: "... the provided IP filter: N rules were applied"
+                    count = None
+                    for rx in (r"Number of rules applied: (\d+)",
+                               r"IP filter: (\d+) rules were applied"):
+                        m = re.search(rx, msg)
+                        if m:
+                            count = int(m.group(1))
+                            break
+                    if count is not None:
+                        # A file that parses to ZERO rules also leaves an
+                        # EMPTY filter installed (verified on qBittorrent
+                        # 5.3.0: malformed input logs success with 0 rules),
+                        # so zero counts as failure and triggers the revert.
+                        return "parsed" if count > 0 else "failed"
         except (ApiError, json.JSONDecodeError):
             pass
         time.sleep(1)
-    return False
+    return "unknown"
 
 
 def split_stem_suffix(path: Path) -> tuple[str, str | None]:
@@ -200,7 +220,21 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
                              "'security' is FireHOL + Spamhaus only")
     parser.add_argument("--min-rules", type=int, default=compiler.MIN_RULES,
                         help="abort if the merged list has fewer rules than this")
+    parser.add_argument("--allow-insecure-http", action="store_true",
+                        help="permit sending WebUI credentials over plaintext "
+                             "HTTP to a non-localhost host (NOT recommended)")
     args = parser.parse_args(argv)
+
+    parsed_url = urllib.parse.urlparse(args.url)
+    host = (parsed_url.hostname or "").lower()
+    if parsed_url.scheme == "http" and host not in ("127.0.0.1", "localhost", "::1") \
+            and not args.allow_insecure_http:
+        sys.exit(
+            f"ERROR: {args.url} would send the WebUI password over plaintext "
+            "HTTP to a non-localhost host. Use HTTPS, an SSH tunnel, a "
+            "loopback-only setup, or pass --allow-insecure-http if you "
+            "accept the risk."
+        )
 
     username = args.username
     password = args.password
@@ -254,22 +288,44 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
     if not applied.get("ip_filter_enabled"):
         sys.exit("ERROR: qBittorrent reports ip_filter_enabled=false after update")
 
-    # 5. Best-effort confirmation that the background parse completed.
-    if api_wait_for_parse(args.url, cookie, started_unix):
+    # 5. Confirm the background parse outcome. qBittorrent installs an
+    #    EMPTY filter when parsing fails, so a failure must revert the
+    #    path preference to the previous filter file (which qBittorrent
+    #    then re-parses, restoring the old rules).
+    outcome = api_watch_parse(args.url, cookie, started_unix)
+    if outcome == "failed":
+        original = {"ip_filter_enabled": prefs.get("ip_filter_enabled", False),
+                    "ip_filter_path": prefs.get("ip_filter_path", "")}
+        api_set_preferences(args.url, cookie, original)
+        restored = api_get_preferences(args.url, cookie)
+        if os.path.normpath(restored.get("ip_filter_path") or "") \
+                == os.path.normpath(original["ip_filter_path"]):
+            sys.exit(
+                f"ERROR: qBittorrent failed to parse {new_path}; restored the "
+                f"previous filter settings ({original['ip_filter_path'] or 'filtering off'}). "
+                f"The new file was left in place for inspection."
+            )
+        sys.exit(
+            f"ERROR: qBittorrent failed to parse {new_path} AND restoring the "
+            "previous filter settings failed - open qBittorrent and re-select "
+            "your previous filter file manually."
+        )
+    if outcome == "parsed":
         print("qBittorrent parsed and applied the new filter (confirmed in its log)")
+        # 6. Clean up ONLY the stale alternate file this tool manages, and
+        #    only after the new filter is confirmed live. The live filter
+        #    and the rate-limit cache are persistent and stay.
+        if stale_path is not None and stale_path.exists() \
+                and os.path.normpath(str(stale_path)) != applied_path:
+            stem, suffix = split_stem_suffix(stale_path)
+            if suffix is not None:
+                stale_path.unlink()
+                print(f"Removed stale previous filter {stale_path}")
     else:
         print("note: could not confirm the background parse in qBittorrent's log "
-              "within a few seconds; the path preference is set and qBittorrent "
-              "will finish loading the new rules momentarily")
-
-    # 6. Clean up ONLY the stale alternate file this tool manages. The live
-    #    filter and the rate-limit cache are persistent and stay.
-    if stale_path is not None and stale_path.exists() \
-            and os.path.normpath(str(stale_path)) != applied_path:
-        stem, suffix = split_stem_suffix(stale_path)
-        if suffix is not None:
-            stale_path.unlink()
-            print(f"Removed stale previous filter {stale_path}")
+              f"within {LOG_POLL_SECONDS}s; the path preference is set. The "
+              "previous filter file was kept - if qBittorrent shows the new "
+              "rule count, you can remove it manually.")
 
     print(f"Done: qBittorrent now filters with {new_path} "
           f"({len(rules)} rules, sources: {', '.join(source_urls)})")
