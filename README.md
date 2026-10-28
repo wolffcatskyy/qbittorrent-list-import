@@ -2,6 +2,12 @@
 
 Build your own qBittorrent IP filter. Know what's in it. Know when it fails.
 
+Have you ever been frustrated wanting to use qBittorrent features like
+blocklists, but could never find a list to use? Us too. This project doesn't
+make or host the lists. Like CrowdSec's engine, it's the tool: your machine
+downloads the lists from their providers, combines them, and installs the
+result into qBittorrent. No data is hosted or redistributed by this project.
+
 Multiple sources, one `ipfilter.dat`, generated on your machine. Combine
 FireHOL Level 1, Spamhaus DROP and DROPv6, and Bluetack Level 1 in the DAT
 format qBittorrent expects. Retained rules carry source labels. Duplicate
@@ -34,6 +40,53 @@ An IP filter, not invisibility. It doesn't hide your address from trackers
 or DHT, guarantee protection from monitoring, or replace a VPN. Feeds can
 lag, and blocked ranges can contain legitimate peers. If a torrent stalls,
 check the filter first.
+
+## One-line setup: compile and install into qBittorrent
+
+```
+curl -fsSL https://raw.githubusercontent.com/wolffcatskyy/qbittorrent-blocklist/main/install.sh | sh
+```
+
+The script downloads the compiler and sync tool into a temporary directory,
+builds the filter, loads it into a running qBittorrent through its Web API,
+then removes the temporary directory. The live filter file and the 24-hour
+download-guard cache are kept.
+
+Prereqs: Linux or macOS, Python 3.10+, and qBittorrent running with its
+WebUI enabled (Tools > Options > Web UI). You'll be prompted for the WebUI
+username and password (or set `QBT_USERNAME`/`QBT_PASSWORD`, and `QBT_URL`
+if it isn't `http://127.0.0.1:8080`). Credentials are never printed or
+stored, and the tool never changes qBittorrent's WebUI or password
+settings. Both login contracts are handled (qBittorrent 5.x's 204 +
+`QBT_SID_<port>` cookie and the older 200 "Ok." + `SID`).
+
+The install never interrupts filtering. Toggling the filter off and on
+leaves qBittorrent unfiltered in between, so this tool never does that.
+Instead it writes the new list to an alternate file (`ipfilter-a.dat` /
+`ipfilter-b.dat`) and points qBittorrent at the new path; qBittorrent loads
+it in a background thread and swaps the filter atomically, with the old
+rules active until the new ones are in place. That behavior is verified in
+qBittorrent's source (`sessionimpl.cpp`: the path change re-parses and then
+sets the filter "in one go so there isn't a time window") and exercised
+end-to-end against a live qBittorrent 5.3.0 on Linux: fresh install, update
+alternation, restart persistence, and parse confirmation in qBittorrent's
+own log.
+
+Any failure before the install step leaves the running filter untouched.
+Cleanup removes only the temporary download directory and the previous
+alternate filter file the tool itself created; a pre-existing filter file
+of yours is never deleted.
+
+Re-run the command whenever you want a fresh list - daily, monthly, your
+choice. The rate-limited Bluetack feed won't download more than once in 24
+hours no matter how often you re-run, and it should stay a feed you fetch
+by hand: its provider's terms prohibit scheduled access. Pass options
+through with `sh -s --`, e.g. `... | sh -s -- --feeds security`.
+
+qBittorrent on another machine (NAS, docker)? The filter file must be on a
+filesystem that qBittorrent process can read, so run the command on that
+host, or use `--filter-dir` pointed at a shared mount plus `QBT_URL` aimed
+at that host.
 
 ## Output format: read this before changing it
 
@@ -126,6 +179,15 @@ python3 main.py --feeds security         # omit Bluetack (what CI builds)
 python3 main.py --output /path/ipfilter.dat
 python3 main.py --min-rules 500          # custom sanity floor
 python3 main.py --allow-partial          # proceed if some feeds fail
+```
+
+To compile *and* install into a running qBittorrent in one step (see
+"One-line setup" above):
+
+```
+python3 qbt_sync.py                      # prompts for WebUI credentials
+python3 qbt_sync.py --feeds security --filter-dir /path/to/dir
+QBT_URL=http://nas:8080 python3 qbt_sync.py
 ```
 
 ## Project history
