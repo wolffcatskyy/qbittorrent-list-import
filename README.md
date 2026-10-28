@@ -12,6 +12,10 @@ is hosted or redistributed by this project.
 
 *From the makers of [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import): yet another list aggregator and installer.*
 
+The irony wasn't lost on us: lists marketed to keep anti-P2P eyes away
+from your torrents come with their own "don't copy this" rules. So we
+provide the tools, not the lists.
+
 Multiple sources, one `ipfilter.dat`, generated on your machine. Combine
 FireHOL Level 1, Spamhaus DROP and DROPv6, and Bluetack Level 1 in the DAT
 format qBittorrent expects. Retained rules carry source labels. Duplicate
