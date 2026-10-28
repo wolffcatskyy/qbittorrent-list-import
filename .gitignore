@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+
+# Compiled filters embed upstream feed data whose terms grant use, not
+# redistribution. This ignore rule only prevents ordinary accidental
+# inclusion; it is not an enforcement mechanism - never force-add these.
+ipfilter*.dat

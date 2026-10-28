@@ -1,0 +1,3 @@
+# No external dependencies. main.py uses only the Python standard library
+# (Python 3.10+). This file exists so the GitHub Actions workflow's
+# `pip install -r requirements.txt` step has something to read.

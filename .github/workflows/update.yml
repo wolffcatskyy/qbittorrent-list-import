@@ -1,0 +1,59 @@
+name: Build security ipfilter
+
+# Terms note: the combined build includes the Bluetack list, whose provider
+# (iblocklist.com/developer) forbids automated access at a predefined time
+# and any redistribution. This workflow therefore builds the SECURITY-ONLY
+# filter (FireHOL + Spamhaus DROP/DROPv6) and never fetches Bluetack.
+# The combined filter is built locally: python3 main.py
+
+on:
+  schedule:
+    # Daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Pinned: special-purpose range classification comes from
+          # Python's ipaddress module and can vary between versions.
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python3 -m unittest
+
+      - name: Compile security blocklist
+        run: python main.py --feeds security --output ipfilter-security.dat
+
+      - name: Validate output format
+        run: |
+          test -s ipfilter-security.dat
+          python3 - <<'PY'
+          import re, sys
+          pattern = re.compile(
+              r"^\d+\.\d+\.\d+\.\d+ - \d+\.\d+\.\d+\.\d+ , 000 , .+$"
+              r"|^[0-9a-fA-F:]+ - [0-9a-fA-F:]+ , 000 , .+$"
+          )
+          bad = [
+              line for line in open("ipfilter-security.dat", encoding="utf-8")
+              if line.strip() and not line.startswith("#") and not pattern.match(line.rstrip("\n"))
+          ]
+          if bad:
+              print(f"{len(bad)} malformed lines, first: {bad[0]!r}")
+              sys.exit(1)
+          print("ipfilter-security.dat format OK")
+          PY
+
