@@ -528,3 +528,56 @@ class MainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ValidateDatTests(unittest.TestCase):
+    """Offline tests for the strict DAT re-validation used before handing a
+    file to qBittorrent."""
+
+    def _dat(self, *lines):
+        return "\n".join(lines) + "\n"
+
+    def test_valid_file_passes(self):
+        text = self._dat(
+            "# comment",
+            "1.2.3.4 - 1.2.3.255 , 000 , Spamhaus_DROP 1.2.3.0/24",
+            "2001:db8::1 - 2001:db8::ffff , 000 , v6 range",
+        )
+        self.assertEqual(m.validate_dat(text, min_rules=1), 2)
+
+    def test_rejects_truncated_line(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("1.2.3.4 - 1.2.3.255"), min_rules=0)
+
+    def test_rejects_bad_ip(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("1.2.3.4 - 999.1.1.1 , 000 , x"), min_rules=0)
+
+    def test_rejects_mixed_families(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(
+                self._dat("1.2.3.4 - 2001:db8::1 , 000 , x"), min_rules=0)
+
+    def test_rejects_reversed_range(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("5.0.0.1 - 4.0.0.1 , 000 , x"), min_rules=0)
+
+    def test_rejects_access_level_above_127(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("1.2.3.4 - 1.2.3.255 , 255 , x"), min_rules=0)
+
+    def test_rejects_non_numeric_level(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("1.2.3.4 - 1.2.3.255 , abc , x"), min_rules=0)
+
+    def test_min_rules_floor(self):
+        with self.assertRaises(ValueError):
+            m.validate_dat(self._dat("1.2.3.4 - 1.2.3.255 , 000 , x"),
+                              min_rules=2)
+
+    def test_roundtrip_rendered_output(self):
+        rules = [(4, 0x0A000001, 0x0A0000FE, "feed 10.0.0.0/24"),
+                 (6, 0x20010DB8000000000000000000000001,
+                  0x20010DB80000000000000000000000FE, "feed v6")]
+        text = m.render_dat(rules, ["https://example.invalid/src"])
+        self.assertEqual(m.validate_dat(text, min_rules=2), 2)

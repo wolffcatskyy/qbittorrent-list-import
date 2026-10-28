@@ -339,6 +339,25 @@ class SyncFlowTests(unittest.TestCase):
         self.assertIn("cannot reach", str(ctx.exception))
 
 
+    def test_roundtrip_validation_failure_blocks_api_change(self):
+        """A file that fails strict re-validation must abort before any
+        qBittorrent preference is touched."""
+        with StubQbt() as stub, TemporaryDirectory() as tmp:
+            def bad_write(path, content):
+                path.write_text("corrupted partial write\n")
+            with mock.patch.object(qbt_sync.compiler, "atomic_write_text",
+                                   side_effect=bad_write):
+                with self.assertRaises(SystemExit) as ctx:
+                    run_sync(stub, ["--filter-dir", tmp])
+            self.assertIn("post-write validation failed", str(ctx.exception))
+            self.assertEqual(stub.set_calls, [])
+
+    def test_pre_switch_warning_is_printed(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp:
+            _, out = run_sync(stub, ["--filter-dir", tmp])
+            self.assertIn("pause your torrents", out)
+
+
 class Qbt5StubLoginTests(unittest.TestCase):
     def test_401_maps_to_rejected_credentials(self):
         with StubQbt(fail_login=True) as stub:

@@ -560,6 +560,46 @@ def render_dat(rules: list, source_urls: list) -> str:
     return "\n".join(lines) + "\n"
 
 
+def validate_dat(text: str, min_rules: int = MIN_RULES) -> int:
+    """Strictly re-parse an eMule DAT filter file and return its rule count.
+
+    Used after writing a filter that is about to be handed to qBittorrent:
+    the file must contain EXACTLY valid rules in the shape render_dat emits
+    (qBittorrent itself merely skips malformed lines, so a corrupt write
+    would silently shrink the filter). Raises ValueError on the first
+    malformed line or when fewer than min_rules rules are present.
+    """
+    count = 0
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            continue
+        fields = line.split(",", 2)
+        if len(fields) < 2 or " - " not in fields[0]:
+            raise ValueError(f"line {lineno}: not 'start - end , level , label'")
+        start_s, end_s = (p.strip() for p in fields[0].split(" - ", 1))
+        try:
+            start = ipaddress.ip_address(start_s)
+            end = ipaddress.ip_address(end_s)
+        except ValueError:
+            raise ValueError(f"line {lineno}: unparsable IP address") from None
+        if start.version != end.version:
+            raise ValueError(f"line {lineno}: mixed address families")
+        if int(start) > int(end):
+            raise ValueError(f"line {lineno}: range start after end")
+        try:
+            level = int(fields[1].strip())
+        except ValueError:
+            raise ValueError(f"line {lineno}: access level not a number") from None
+        if not 0 <= level <= 127:
+            raise ValueError(f"line {lineno}: access level {level} above 127 "
+                             "(qBittorrent skips those rules)")
+        count += 1
+    if count < min_rules:
+        raise ValueError(f"only {count} valid rules (< {min_rules})")
+    return count
+
+
 def select_feeds(name: str) -> list:
     """Choose the feed set. 'security' excludes the Bluetack feed: its
     provider's developer terms (iblocklist.com/developer) forbid automated

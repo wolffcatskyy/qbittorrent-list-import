@@ -263,9 +263,29 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
             "leaving the existing qBittorrent filter untouched"
         )
     compiler.atomic_write_text(new_path, compiler.render_dat(rules, source_urls))
-    print(f"Wrote {len(rules)} rules to {new_path}")
+    # Round-trip validation: strictly re-parse the file as written before
+    # qBittorrent ever sees it. Catches corrupt/partial writes and format
+    # regressions while qBittorrent's settings are still untouched. Residual
+    # it cannot cover: qBittorrent's own parser rejecting a well-formed file.
+    try:
+        validated = compiler.validate_dat(new_path.read_text(encoding="utf-8"),
+                                          min_rules=args.min_rules)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"ERROR: post-write validation failed: {exc}; "
+                 "qBittorrent settings left untouched")
+    if validated != len(rules):
+        sys.exit(f"ERROR: post-write validation counted {validated} rules, "
+                 f"expected {len(rules)}; qBittorrent settings left untouched")
+    print(f"Wrote {len(rules)} rules to {new_path} (re-validated on disk)")
 
-    # 3. Point qBittorrent at the NEW path. qBittorrent parses it in the
+    # 3. Point qBittorrent at the NEW path. Visible residual-risk warning
+    #    BEFORE any state change: the failure window is real even though
+    #    the success path is atomic and the revert is automatic.
+    print("About to switch qBittorrent to the new filter. If qBittorrent cannot")
+    print("parse it, qBittorrent installs an empty filter; this tool detects that")
+    print("within seconds and reverts automatically. To avoid even that brief")
+    print("window, pause your torrents before updating.")
+    # 4. Point qBittorrent at the NEW path. qBittorrent parses it in the
     #    background and swaps the filter atomically; the previous rules stay
     #    active until the swap (verified in qBittorrent source, see module
     #    docstring). ip_filter_enabled is only ever set to true, never
@@ -276,7 +296,7 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
         "ip_filter_path": str(new_path),
     })
 
-    # 4. Confirm the preference landed.
+    # 5. Confirm the preference landed.
     applied = api_get_preferences(args.url, cookie)
     applied_path = os.path.normpath(applied.get("ip_filter_path") or "")
     if applied_path != os.path.normpath(str(new_path)):
@@ -288,7 +308,7 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
     if not applied.get("ip_filter_enabled"):
         sys.exit("ERROR: qBittorrent reports ip_filter_enabled=false after update")
 
-    # 5. Confirm the background parse outcome. qBittorrent installs an
+    # 6. Confirm the background parse outcome. qBittorrent installs an
     #    EMPTY filter when parsing fails, so a failure must revert the
     #    path preference to the previous filter file (which qBittorrent
     #    then re-parses, restoring the old rules).
@@ -312,7 +332,7 @@ def run(argv=None, *, now_unix: int | None = None) -> int:
         )
     if outcome == "parsed":
         print("qBittorrent parsed and applied the new filter (confirmed in its log)")
-        # 6. Clean up ONLY the stale alternate file this tool manages, and
+        # 7. Clean up ONLY the stale alternate file this tool manages, and
         #    only after the new filter is confirmed live. The live filter
         #    and the rate-limit cache are persistent and stay.
         if stale_path is not None and stale_path.exists() \
