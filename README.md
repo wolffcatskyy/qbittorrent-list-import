@@ -8,6 +8,8 @@ make or host the lists. Like CrowdSec's engine, it's the tool: your machine
 downloads the lists from their providers, combines them, and installs the
 result into qBittorrent. No data is hosted or redistributed by this project.
 
+*From the makers of [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import): yet another list aggregator and installer.*
+
 Multiple sources, one `ipfilter.dat`, generated on your machine. Combine
 FireHOL Level 1, Spamhaus DROP and DROPv6, and Bluetack Level 1 in the DAT
 format qBittorrent expects. Retained rules carry source labels. Duplicate
@@ -99,6 +101,65 @@ qBittorrent on another machine (NAS, docker)? The filter file must be on a
 filesystem that qBittorrent process can read, so run the command on that
 host, or use `--filter-dir` pointed at a shared mount plus `QBT_URL` aimed
 at that host.
+
+## The Companion menu: blocklist, trackers, restore, uninstall
+
+Run the one-line installer on a terminal and it now opens a menu:
+
+```
+qBittorrent Companion
+From the makers of crowdsec-blocklist-import: yet another list
+aggregator and installer.
+========================================
+What would you like to do?
+  1) Install/update the IP blocklist
+  2) Set up the tracker list (opt-in)
+  3) Preview changes (no downloads, no changes)
+  4) Restore previous settings
+  5) Uninstall this tool's changes
+  6) Refresh status
+  q) Quit
+```
+
+The menu is the default on an interactive terminal; when stdin is not a
+terminal (scripts, pipes, cron) the tool behaves exactly as before and
+installs the blocklist without prompting. Every action is also a flag for
+non-interactive use: `--blocklist`, `--trackers`, `--restore`,
+`--uninstall`, `--status`, `--preview` (add `--yes` to skip
+confirmations). Status shows the qBittorrent version, the current filter
+path, whether filtering is on, when this tool last changed what, and
+where the download-guard cache stands.
+
+**Tracker setup is opt-in and says why.** Before anything changes, the
+tool states the tradeoff plainly: every added tracker is another third
+party that receives your torrent announces - your IP and what you are
+downloading. (qBittorrent itself never applies added trackers to private
+torrents.) On qBittorrent 5.1 or newer it configures a URL subscription
+to the [ngosang/trackerslist](https://github.com/ngosang/trackerslist)
+"best" list, which qBittorrent then downloads and refreshes about every
+24 hours itself (the refresh timer is in qBittorrent's
+`sessionimpl.cpp`). On older qBittorrent versions it installs a one-time
+static copy and says clearly that it will go stale. If you already have a
+different tracker URL subscription configured, the tool names it and asks
+before replacing it.
+
+**Restore and uninstall keep a memory, on purpose.** The first time the
+tool changes a managed setting, it records the previous values in
+`~/.qbittorrent-blocklist/companion-state.json` (permissions 0600). That
+snapshot is taken once and never silently refreshed, so "Restore previous
+settings" returns your real pre-tool configuration, not last week's.
+If you changed a managed setting yourself since the tool last touched it,
+the tool flags the difference and asks before overwriting your edit.
+"Uninstall this tool's changes" removes the tool's settings and the
+filter files it generated (identified by the tool's own header and
+`ipfilter-a/b` naming - a pre-existing filter file of yours is never
+deleted). It does not touch qBittorrent itself, unrelated settings, your
+files, or the 24-hour provider download-guard cache, and it keeps the
+restore record so a restore still works afterwards.
+
+Preview (menu item 3) shows exactly what an install or tracker setup
+would do - feeds, file paths, setting changes - with no downloads and no
+changes applied.
 
 ## Output format: read this before changing it
 

@@ -36,7 +36,12 @@ class StubQbt:
         self.prefs = {
             "ip_filter_enabled": False,
             "ip_filter_path": "",
+            "add_trackers_enabled": False,
+            "add_trackers": "",
+            "add_trackers_from_url_enabled": False,
+            "add_trackers_url": "",
         }
+        self.version = "5.3.0"
         if prefs:
             self.prefs.update(prefs)
         self.fail_login = fail_login
@@ -100,7 +105,9 @@ class StubQbt:
                 if not self._authorized():
                     self._send(403, "Forbidden")
                     return
-                if self.path == "/api/v2/app/preferences":
+                if self.path == "/api/v2/app/version":
+                    self._send(200, stub.version)
+                elif self.path == "/api/v2/app/preferences":
                     self._send(200, json.dumps(stub.prefs))
                 elif self.path.startswith("/api/v2/log/main"):
                     self._send(200, json.dumps(stub.log_entries))
@@ -134,15 +141,36 @@ def fake_compile(feeds: str):
     return list(FIXTURE_RULES), list(FIXTURE_URLS)
 
 
-def run_sync(stub: StubQbt, extra_args: list[str]):
+def run_sync(stub: StubQbt, extra_args: list[str], state_dir: str | None = None):
     argv = ["--url", stub.url, "--username", GOOD_USER,
-            "--password", GOOD_PASS, "--min-rules", "1"] + extra_args
+            "--password", GOOD_PASS, "--min-rules", "1", "--blocklist"] + extra_args
     out = io.StringIO()
-    with mock.patch.object(qbt_sync, "compile_rules", side_effect=fake_compile), \
-            contextlib.redirect_stdout(out):
-        code = qbt_sync.run(argv, now_unix=stub.now_unix - 2)
+    patches = [mock.patch.object(qbt_sync, "compile_rules", side_effect=fake_compile)]
+    if state_dir is not None:
+        patches.append(mock.patch.object(qbt_sync, "STATE_FILE",
+                                         Path(state_dir) / "companion-state.json"))
+    with contextlib.ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        with contextlib.redirect_stdout(out):
+            code = qbt_sync.run(argv, now_unix=stub.now_unix - 2)
     return code, out.getvalue()
 
+
+
+
+class StateIsolationMixin:
+    """Route the companion state file into a per-test temp directory."""
+
+    def setUp(self):
+        self._state_tmp = TemporaryDirectory()
+        self.addCleanup(self._state_tmp.cleanup)
+        patcher = mock.patch.object(
+            qbt_sync, "STATE_FILE",
+            Path(self._state_tmp.name) / "companion-state.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.state_path = Path(self._state_tmp.name) / "companion-state.json"
 
 class PathChoiceTests(unittest.TestCase):
     def test_unset_path_uses_default_dir_and_a_suffix(self):
@@ -171,7 +199,7 @@ class PathChoiceTests(unittest.TestCase):
         self.assertIsNone(stale)
 
 
-class SyncFlowTests(unittest.TestCase):
+class SyncFlowTests(StateIsolationMixin, unittest.TestCase):
     def test_first_install_enables_filter_and_sets_path(self):
         with StubQbt() as stub, TemporaryDirectory() as tmp:
             code, out = run_sync(stub, ["--filter-dir", tmp])
@@ -392,6 +420,168 @@ class PromptCredentialTests(unittest.TestCase):
                 qbt_sync.prompt_credential("password: ", secret=True)
         self.assertIn("no interactive terminal", str(ctx.exception))
         self.assertNotIn("Traceback", str(ctx.exception))
+
+
+
+def run_action(stub: StubQbt, argv: list[str], tty_answers: list[str] | None = None,
+               fetch_text: str = "", statedir: str | None = None):
+    """Run any action with optional tty answer script and persistent state dir."""
+    out = io.StringIO()
+    own_dir = None
+    if statedir is None:
+        own_dir = TemporaryDirectory()
+        statedir = own_dir.name
+    try:
+        patches = [
+            mock.patch.object(qbt_sync, "STATE_FILE",
+                              Path(statedir) / "companion-state.json"),
+            mock.patch.object(qbt_sync, "compile_rules", side_effect=fake_compile),
+            mock.patch.object(qbt_sync.compiler, "fetch", return_value=fetch_text),
+        ]
+        if tty_answers is not None:
+            answers = iter(tty_answers)
+            patches.append(mock.patch.object(qbt_sync, "tty_prompt",
+                                             side_effect=lambda *a, **k: next(answers)))
+            patches.append(mock.patch.object(qbt_sync, "has_tty",
+                                             return_value=True))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with contextlib.redirect_stdout(out):
+                code = qbt_sync.run(
+                    ["--url", stub.url, "--username", GOOD_USER,
+                     "--password", GOOD_PASS, "--min-rules", "1"] + argv,
+                    now_unix=stub.now_unix - 2)
+        state_file = Path(statedir) / "companion-state.json"
+        state = json.loads(state_file.read_text()) if state_file.exists() else {}
+    finally:
+        if own_dir is not None:
+            own_dir.cleanup()
+    return code, out.getvalue(), state
+
+
+class TrackerActionTests(StateIsolationMixin, unittest.TestCase):
+    def test_native_url_subscription_on_53(self):
+        with StubQbt() as stub:
+            code, out, state = run_action(stub, ["--trackers", "--yes"])
+            self.assertEqual(code, 0)
+            self.assertTrue(stub.prefs["add_trackers_from_url_enabled"])
+            self.assertEqual(stub.prefs["add_trackers_url"], qbt_sync.TRACKER_LIST_URL)
+            self.assertFalse(stub.prefs["add_trackers_enabled"],
+                             "native path must not touch the manual list")
+            self.assertIn("original_prefs", state,
+                          "pre-change snapshot must be saved for restore")
+            self.assertIn("every 24 hours", out)
+
+    def test_static_fallback_on_46(self):
+        with StubQbt() as stub:
+            stub.version = "4.6.5"
+            code, out, state = run_action(
+                stub, ["--trackers", "--yes"],
+                fetch_text="udp://tracker-a\n\nudp://tracker-b\n")
+            self.assertEqual(code, 0)
+            self.assertTrue(stub.prefs["add_trackers_enabled"])
+            self.assertIn("udp://tracker-a", stub.prefs["add_trackers"])
+            self.assertFalse(stub.prefs["add_trackers_from_url_enabled"])
+            self.assertIn("will NOT stay fresh", out)
+
+    def test_trackers_declined_changes_nothing(self):
+        with StubQbt() as stub:
+            with self.assertRaises(SystemExit):
+                run_action(stub, ["--trackers"], tty_answers=["n"])
+            self.assertFalse(stub.prefs["add_trackers_from_url_enabled"])
+            self.assertFalse(stub.prefs["add_trackers_enabled"])
+
+    def test_existing_other_url_subscription_is_flagged(self):
+        with StubQbt({"add_trackers_from_url_enabled": True,
+                      "add_trackers_url": "https://example.invalid/other.txt"}) as stub:
+            code, out, _ = run_action(stub, ["--trackers", "--yes"])
+            self.assertIn("existing tracker URL subscription", out)
+
+
+class RestoreUninstallTests(StateIsolationMixin, unittest.TestCase):
+    def test_restore_returns_original_prefs(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp, TemporaryDirectory() as sd:
+            code, _, _ = run_action(stub, ["--blocklist", "--filter-dir", tmp],
+                                    statedir=sd)
+            self.assertEqual(code, 0)
+            self.assertTrue(stub.prefs["ip_filter_enabled"])
+            code, out, _ = run_action(stub, ["--restore", "--yes"], statedir=sd)
+            self.assertEqual(code, 0)
+            self.assertFalse(stub.prefs["ip_filter_enabled"])
+            self.assertEqual(stub.prefs["ip_filter_path"], "")
+
+    def test_restore_warns_about_user_drift(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp, TemporaryDirectory() as sd:
+            run_action(stub, ["--blocklist", "--filter-dir", tmp], statedir=sd)
+            # user independently changed the filter path after our install
+            stub.prefs["ip_filter_path"] = "/user/changed-their-filter.dat"
+            with self.assertRaises(SystemExit):
+                run_action(stub, ["--restore"], tty_answers=["n"], statedir=sd)
+            self.assertEqual(stub.prefs["ip_filter_path"],
+                             "/user/changed-their-filter.dat",
+                             "declined restore must not overwrite the user's edit")
+
+    def test_restore_then_uninstall_shows_no_false_drift(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp, TemporaryDirectory() as sd:
+            run_action(stub, ["--blocklist", "--filter-dir", tmp], statedir=sd)
+            run_action(stub, ["--restore", "--yes"], statedir=sd)
+            code, out, _ = run_action(stub, ["--uninstall", "--yes"], statedir=sd)
+            self.assertEqual(code, 0)
+            self.assertNotIn("WARNING: some settings were changed", out)
+
+    def test_uninstall_removes_only_generated_files(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp, TemporaryDirectory() as sd:
+            run_action(stub, ["--blocklist", "--filter-dir", tmp], statedir=sd)
+            ours = Path(tmp) / "ipfilter-a.dat"
+            not_ours = Path(tmp) / "keep-me.dat"
+            not_ours.write_text("user content")
+            code, out, _ = run_action(stub, ["--uninstall", "--yes"], statedir=sd)
+            self.assertEqual(code, 0)
+            self.assertFalse(ours.exists(), "generated filter removed")
+            self.assertTrue(not_ours.exists(), "user file untouched")
+            self.assertFalse(stub.prefs["ip_filter_enabled"])
+            self.assertIn("rate-limit cache", out)
+
+    def test_restore_without_history_is_noop(self):
+        with StubQbt() as stub:
+            code, out, _ = run_action(stub, ["--restore", "--yes"])
+            self.assertIn("Nothing to restore", out)
+            self.assertEqual(stub.set_calls, [])
+
+
+class MenuAndStatusTests(StateIsolationMixin, unittest.TestCase):
+    def test_menu_shows_status_tagline_and_quits(self):
+        with StubQbt() as stub:
+            code, out, _ = run_action(stub, [], tty_answers=["q"])
+            self.assertEqual(code, 0)
+            self.assertIn("qBittorrent Companion", out)
+            self.assertIn("crowdsec-blocklist-import", out)
+            self.assertIn("qBittorrent 5.3.0", out)
+            self.assertIn("URL subscription off", out)
+
+    def test_menu_status_then_quit(self):
+        with StubQbt() as stub:
+            code, out, _ = run_action(stub, [], tty_answers=["6", "q"])
+            self.assertEqual(out.count("last blocklist update"), 2)
+
+    def test_preview_makes_no_changes(self):
+        with StubQbt() as stub, TemporaryDirectory() as tmp:
+            code, out, _ = run_action(stub, ["--preview", "--filter-dir", tmp])
+            self.assertEqual(code, 0)
+            self.assertIn("no downloads, no changes", out)
+            self.assertIn("ipfilter-a.dat", out)
+            self.assertEqual(stub.set_calls, [])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_status_flag_reports_filter_and_trackers(self):
+        with StubQbt({"ip_filter_enabled": True,
+                      "ip_filter_path": "/x/ipfilter-a.dat",
+                      "add_trackers_from_url_enabled": True,
+                      "add_trackers_url": "https://t.example/list.txt"}) as stub:
+            code, out, _ = run_action(stub, ["--status"])
+            self.assertIn("enabled", out)
+            self.assertIn("https://t.example/list.txt", out)
 
 
 class Qbt5StubLoginTests(unittest.TestCase):
