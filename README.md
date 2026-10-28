@@ -59,22 +59,34 @@ username and password on the terminal (set `QBT_URL` if it isn't
 tool never changes qBittorrent's WebUI or password settings. Both login contracts are handled (qBittorrent 5.x's 204 +
 `QBT_SID_<port>` cookie and the older 200 "Ok." + `SID`).
 
-The install never interrupts filtering. Toggling the filter off and on
-leaves qBittorrent unfiltered in between, so this tool never does that.
-Instead it writes the new list to an alternate file (`ipfilter-a.dat` /
-`ipfilter-b.dat`) and points qBittorrent at the new path; qBittorrent loads
-it in a background thread and swaps the filter atomically, with the old
-rules active until the new ones are in place. That behavior is verified in
-qBittorrent's source (`sessionimpl.cpp`: the path change re-parses and then
-sets the filter "in one go so there isn't a time window") and exercised
-end-to-end against a live qBittorrent 5.3.0 on Linux: fresh install, update
-alternation, restart persistence, and parse confirmation in qBittorrent's
-own log.
+The normal update path never interrupts filtering. Toggling the filter off
+and on leaves qBittorrent unfiltered in between, so this tool never does
+that. Instead it writes the new list to an alternate file (`ipfilter-a.dat`
+/ `ipfilter-b.dat`) and points qBittorrent at the new path; qBittorrent
+loads it in a background thread and swaps the filter atomically, with the
+old rules active until the new ones are in place. That behavior is verified
+in qBittorrent's source (`sessionimpl.cpp`: the path change re-parses and
+then sets the filter "in one go so there isn't a time window") and
+exercised end-to-end against a live qBittorrent 5.3.0 on Linux: fresh
+install, update alternation, restart persistence, and parse confirmation in
+qBittorrent's own log.
+
+The failure path is handled, but read this honestly: if qBittorrent cannot
+parse the new file after the switch (which qBittorrent answers by
+installing an empty filter - including via a "0 rules applied" success
+message), the tool detects it from qBittorrent's log within seconds and
+automatically reverts to your previous filter file, which qBittorrent then
+re-loads (verified live: the full rule set comes back). Between qBittorrent
+installing the empty filter and the revert, filtering is briefly open. The
+compiler's guards (atomic write, minimum-rule floor, fail-closed feeds)
+make a bad file very unlikely, but the window is real, so it is stated
+here. If you need even that window closed, pause your torrents before
+updating.
 
 Any failure before the install step leaves the running filter untouched.
-Cleanup removes only the temporary download directory and the previous
-alternate filter file the tool itself created; a pre-existing filter file
-of yours is never deleted.
+Cleanup removes only the temporary download directory and, only after a
+confirmed successful load, the previous alternate filter file the tool
+itself created; a pre-existing filter file of yours is never deleted.
 
 Re-run the command whenever you want a fresh list - daily, monthly, your
 choice. The rate-limited Bluetack feed won't download more than once in 24

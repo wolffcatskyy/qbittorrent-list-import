@@ -34,8 +34,8 @@ trap 'rm -rf "$TMPDIR_SYNC"' EXIT INT TERM
 # Resolve the current main HEAD to a commit SHA, then download THAT
 # commit's tarball in one request. Fetching main.py and qbt_sync.py as
 # separate raw files could mix versions if a push lands between fetches;
-# a single-commit tarball cannot. Falls back to sequential raw fetches
-# (with a warning) if the API lookup fails.
+# a single-commit tarball cannot. Fails closed if the SHA cannot be
+# resolved rather than falling back to inconsistent files.
 SHA="$(python3 - "$REPO" <<'PY'
 import json, sys, urllib.request
 try:
@@ -58,19 +58,9 @@ if [ -n "$SHA" ]; then
     tar -xzf "$TMPDIR_SYNC/repo.tar.gz" -C "$TMPDIR_SYNC" --strip-components=1
     rm "$TMPDIR_SYNC/repo.tar.gz"
 else
-    echo "note: could not resolve a consistent snapshot; fetching files individually" >&2
-    RAW="https://raw.githubusercontent.com/$REPO/main"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RAW/main.py" -o "$TMPDIR_SYNC/main.py"
-        curl -fsSL "$RAW/qbt_sync.py" -o "$TMPDIR_SYNC/qbt_sync.py"
-    else
-        python3 - "$RAW" "$TMPDIR_SYNC" <<'PY'
-import sys, urllib.request
-raw, dest = sys.argv[1], sys.argv[2]
-for name in ("main.py", "qbt_sync.py"):
-    urllib.request.urlretrieve(f"{raw}/{name}", f"{dest}/{name}")
-PY
-    fi
+    echo "ERROR: could not resolve a consistent snapshot of the tools" >&2
+    echo "(GitHub API unreachable or rate-limited). Please retry in a minute." >&2
+    exit 1
 fi
 
 python3 "$TMPDIR_SYNC/qbt_sync.py" "$@"
